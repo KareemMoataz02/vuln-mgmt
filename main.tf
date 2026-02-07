@@ -180,40 +180,42 @@ resource "azurerm_network_interface" "openvas_nic" {
 
 locals {
   openvas_cloud_init = <<-EOF
-  #cloud-config
-  package_update: true
-  packages:
-    - docker.io
-    - docker-compose-plugin
+#cloud-config
+package_update: true
+package_upgrade: true
 
-  write_files:
-    - path: /opt/gvm/docker-compose.yml
-      permissions: "0644"
-      content: |
-        services:
-          gvm:
-            image: greenbone/community-edition:latest
-            container_name: gvm
-            restart: unless-stopped
-            ports:
-              - "9392:9392"
-            volumes:
-              - gvm-data:/var/lib/gvm
-              - postgres-data:/var/lib/postgresql
-              - redis-data:/var/lib/redis
-        volumes:
-          gvm-data:
-          postgres-data:
-          redis-data:
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
 
-  runcmd:
-    - [ bash, -lc, "systemctl enable --now docker" ]
-    - [ bash, -lc, "usermod -aG docker azureuser || true" ]
-    - [ bash, -lc, "mkdir -p /opt/gvm" ]
-    - [ bash, -lc, "cd /opt/gvm && docker compose up -d" ]
-    - [ bash, -lc, "docker ps || true" ]
+runcmd:
+  - [ bash, -lc, "set -euxo pipefail; exec > >(tee -a /var/log/openvas-bootstrap.log) 2>&1" ]
+
+  # Add Docker official repo (needed for docker-compose-plugin)
+  - [ bash, -lc, "install -m 0755 -d /etc/apt/keyrings" ]
+  - [ bash, -lc, "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg" ]
+  - [ bash, -lc, "chmod a+r /etc/apt/keyrings/docker.gpg" ]
+  - [ bash, -lc, "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable\" > /etc/apt/sources.list.d/docker.list" ]
+  - [ bash, -lc, "apt-get update" ]
+
+  # Install Docker Engine + Compose v2 plugin
+  - [ bash, -lc, "apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin" ]
+  - [ bash, -lc, "systemctl enable --now docker" ]
+
+  # Deploy Greenbone Community Containers (includes gsa + port mapping)
+  - [ bash, -lc, "mkdir -p /opt/gvm" ]
+  - [ bash, -lc, "cd /opt/gvm && curl -fL -o docker-compose.yml https://greenbone.github.io/docs/latest/_static/docker-compose.yml" ]
+
+  # Start using Compose v2
+  - [ bash, -lc, "cd /opt/gvm && docker compose up -d" ]
+
+  # Sanity
+  - [ bash, -lc, "docker compose ps || true" ]
+  - [ bash, -lc, "ss -lntp | grep 9392 || true" ]
   EOF
 }
+
 
 resource "azurerm_linux_virtual_machine" "openvas" {
   name                = "${local.name}-openvas"
@@ -245,7 +247,7 @@ os_disk {
     version   = "latest"
   }
 
-  custom_data = base64encode(local.openvas_cloud_init)
+  user_data = base64encode(local.openvas_cloud_init)
 }
 
 # -------------------------
