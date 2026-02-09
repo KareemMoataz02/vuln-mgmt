@@ -1,351 +1,164 @@
+# -------------------------
+# Root module - wires network, bastion, scanner, targets, monitoring
+# -------------------------
 resource "random_string" "suffix" {
   length  = 5
   special = false
   upper   = false
 }
 
+data "azurerm_client_config" "current" {}
+
 locals {
   name = "${var.project_name}-${random_string.suffix.result}"
+
+  tags = {
+    project = var.project_name
+    env     = var.environment
+  }
 }
 
+# -------------------------
+# Resource Group
+# -------------------------
 resource "azurerm_resource_group" "rg" {
   name     = "${local.name}-rg"
   location = var.location
+  tags     = local.tags
 }
 
-resource "azurerm_virtual_network" "vnet" {
-  name                = "${local.name}-vnet"
-  address_space       = ["10.10.0.0/16"]
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
+# -------------------------
+# Key Vault for secrets (no passwords in tfvars/state when using random)
+# -------------------------
+resource "azurerm_key_vault" "kv" {
+  name                        = substr(replace("${local.name}-kv", "-", ""), 0, 24)
+  location                    = azurerm_resource_group.rg.location
+  resource_group_name         = azurerm_resource_group.rg.name
+  tenant_id                   = data.azurerm_client_config.current.tenant_id
+  sku_name                    = "standard"
+  soft_delete_retention_days  = 7
+  purge_protection_enabled    = false
+  tags                        = local.tags
 }
 
-resource "azurerm_subnet" "security" {
-  name                 = "security-tools"
-  resource_group_name  = azurerm_resource_group.rg.name
-  virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.10.1.0/24"]
+resource "azurerm_key_vault_access_policy" "terraform" {
+  key_vault_id = azurerm_key_vault.kv.id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = data.azurerm_client_config.current.object_id
 
-  depends_on = [azurerm_virtual_network.vnet]
+  secret_permissions = ["Get", "List", "Set", "Delete", "Purge"]
 }
 
-resource "azurerm_subnet" "targets" {
-  name                 = "targets"
-  resource_group_name  = azurerm_resource_group.rg.name
-  virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.10.2.0/24"]
+resource "random_password" "windows_admin" {
+  count = var.create_windows_target ? 1 : 0
 
-  depends_on = [azurerm_virtual_network.vnet]
+  length           = 16
+  special          = true
+  override_special = "!@#$%&*"
 }
 
+resource "azurerm_key_vault_secret" "windows_admin_password" {
+  count = var.create_windows_target ? 1 : 0
 
-# NSG for OpenVAS VM (management access)
-resource "azurerm_network_security_group" "openvas_nsg" {
-  name                = "${local.name}-openvas-nsg"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
+  name         = "windows-admin-password"
+  value        = coalesce(var.windows_admin_password, random_password.windows_admin[0].result)
+  key_vault_id = azurerm_key_vault.kv.id
 
-  # SSH to OpenVAS (restrict to your IP)
-  security_rule {
-    name                       = "Allow-SSH-From-MyIP"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = var.my_public_ip_cidr
-    destination_address_prefix = "*"
-  }
-
-  # OpenVAS UI (GSA) default port 9392 (restrict to your IP)
-  security_rule {
-    name                       = "Allow-OpenVAS-UI-From-MyIP"
-    priority                   = 110
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "9392"
-    source_address_prefix      = var.my_public_ip_cidr
-    destination_address_prefix = "*"
-  }
-
-  # Outbound allow all (simple lab)
-  security_rule {
-    name                       = "Allow-All-Outbound"
-    priority                   = 100
-    direction                  = "Outbound"
-    access                     = "Allow"
-    protocol                   = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-}
-
-resource "azurerm_subnet_network_security_group_association" "openvas_assoc" {
-  subnet_id                 = azurerm_subnet.security.id
-  network_security_group_id = azurerm_network_security_group.openvas_nsg.id
-}
-
-# NSG for Targets subnet: allow scanner subnet to reach common scan ports
-resource "azurerm_network_security_group" "targets_nsg" {
-  name                = "${local.name}-targets-nsg"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  # From OpenVAS subnet to Linux SSH
-  security_rule {
-    name                       = "Allow-SSH-From-Scanner"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = "10.10.1.0/24"
-    destination_address_prefix = "*"
-  }
-
-  # From OpenVAS subnet to WinRM HTTP (5985) and HTTPS (5986)
-  security_rule {
-    name                       = "Allow-WinRM-From-Scanner"
-    priority                   = 110
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_ranges    = ["5985", "5986"]
-    source_address_prefix      = "10.10.1.0/24"
-    destination_address_prefix = "*"
-  }
-
-  # From OpenVAS subnet to SMB (445) for Windows authenticated checks (if used)
-  security_rule {
-    name                       = "Allow-SMB-From-Scanner"
-    priority                   = 120
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "445"
-    source_address_prefix      = "10.10.1.0/24"
-    destination_address_prefix = "*"
-  }
-
-  # From OpenVAS subnet to web ports (80/443)
-  security_rule {
-    name                       = "Allow-Web-From-Scanner"
-    priority                   = 130
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_ranges    = ["80", "443"]
-    source_address_prefix      = "10.10.1.0/24"
-    destination_address_prefix = "*"
-  }
-
-  # Deny everything else inbound (optional; Azure default is "allow vnet", so we keep it simple)
-}
-
-resource "azurerm_subnet_network_security_group_association" "targets_assoc" {
-  subnet_id                 = azurerm_subnet.targets.id
-  network_security_group_id = azurerm_network_security_group.targets_nsg.id
-}
-
-# Public IP for OpenVAS VM (simple lab). Better: use Bastion and no public IP.
-resource "azurerm_public_ip" "openvas_pip" {
-  name                = "${local.name}-openvas-pip"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  allocation_method   = "Static"
-  sku                 = "Standard"
-}
-
-resource "azurerm_network_interface" "openvas_nic" {
-  name                = "${local.name}-openvas-nic"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  ip_configuration {
-    name                          = "ipconfig1"
-    subnet_id                     = azurerm_subnet.security.id
-    private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.openvas_pip.id
-  }
+  depends_on = [azurerm_key_vault_access_policy.terraform]
 }
 
 locals {
-  # Cloud-init for Ubuntu 22.04: installs Docker CE + Compose v2 plugin, deploys Greenbone stack,
-  # exposes UI on 0.0.0.0:9392, and retries until gvmd + gsa are running.
-  openvas_cloud_init = <<-EOF
-#cloud-config
-package_update: true
-package_upgrade: true
-
-runcmd:
-  # Start logging ASAP
-  - [ bash, -lc, "set -euxo pipefail; exec > >(tee -a /var/log/openvas-bootstrap.log) 2>&1" ]
-
-  # Base deps
-  - [ bash, -lc, "apt-get update" ]
-  - [ bash, -lc, "apt-get install -y ca-certificates curl gnupg lsb-release" ]
-
-  # Docker official repo (for docker-ce + docker-compose-plugin)
-  - [ bash, -lc, "install -m 0755 -d /etc/apt/keyrings" ]
-  - [ bash, -lc, "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg" ]
-  - [ bash, -lc, "chmod a+r /etc/apt/keyrings/docker.gpg" ]
-  - [ bash, -lc, "CODENAME=$(. /etc/os-release && echo $VERSION_CODENAME); ARCH=$(dpkg --print-architecture); echo \"deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $CODENAME stable\" > /etc/apt/sources.list.d/docker.list" ]
-  - [ bash, -lc, "apt-get update" ]
-
-  # Install Docker Engine + Compose v2 plugin
-  - [ bash, -lc, "apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin" ]
-  - [ bash, -lc, "systemctl enable --now docker" ]
-
-  # Wait for Docker daemon
-  - [ bash, -lc, "for i in {1..90}; do docker info >/dev/null 2>&1 && break; echo waiting-for-docker; sleep 2; done" ]
-
-  # Deploy Greenbone compose
-  - [ bash, -lc, "mkdir -p /opt/gvm && cd /opt/gvm" ]
-  - [ bash, -lc, "cd /opt/gvm && curl -fL -o docker-compose.yml https://greenbone.github.io/docs/latest/_static/docker-compose.yml" ]
-
-  # Expose GSA UI on all interfaces (default is localhost only)
-  - [ bash, -lc, "cd /opt/gvm && sed -i 's/127\\.0\\.0\\.1:9392:80/0.0.0.0:9392:80/' docker-compose.yml || true" ]
-
-  # Pull first to reduce first-boot race conditions
-  - [ bash, -lc, "cd /opt/gvm && COMPOSE_PROFILES=full docker compose pull" ]
-
-  # Bring up FULL profile + retry until gvmd and gsa are running
-  - [ bash, -lc, "cd /opt/gvm && for i in {1..12}; do COMPOSE_PROFILES=full docker compose up -d || true; sleep 15; docker compose ps --services --filter status=running | grep -qx gvmd && docker compose ps --services --filter status=running | grep -qx gsa && echo 'gvmd+gsa running' && break; echo \"waiting for gvmd/gsa (attempt $i)\"; docker compose ps || true; done" ]
-
-  # Final sanity
-  - [ bash, -lc, "cd /opt/gvm && docker compose ps || true" ]
-  - [ bash, -lc, "ss -lntp | grep 9392 || true" ]
-EOF
-}
-
-
-resource "azurerm_linux_virtual_machine" "openvas" {
-  name                = "${local.name}-openvas"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  size = "Standard_D2d_v4"
-
-  admin_username                  = var.admin_username
-  disable_password_authentication = true
-
-  network_interface_ids = [azurerm_network_interface.openvas_nic.id]
-
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.admin_public_key
-  }
-
-os_disk {
-  caching              = "ReadWrite"
-  storage_account_type = "StandardSSD_LRS"
-  disk_size_gb         = 64
-}
-
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts"
-    version   = "latest"
-  }
-
-  user_data = base64encode(local.openvas_cloud_init)
+  windows_admin_password = var.create_windows_target ? coalesce(var.windows_admin_password, random_password.windows_admin[0].result) : null
 }
 
 # -------------------------
-# OPTIONAL: Linux target VM
+# Network module
 # -------------------------
-resource "azurerm_network_interface" "linux_target_nic" {
-  count               = var.create_linux_target ? 1 : 0
-  name                = "${local.name}-lin-tgt-nic"
+module "network" {
+  source = "./modules/network"
+
+  name                = local.name
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-
-  ip_configuration {
-    name                          = "ipconfig1"
-    subnet_id                     = azurerm_subnet.targets.id
-    private_ip_address_allocation = "Dynamic"
-  }
+  tags                = local.tags
 }
 
-resource "azurerm_linux_virtual_machine" "linux_target" {
-  count               = var.create_linux_target ? 1 : 0
-  name                = "${local.name}-linux-target"
+# -------------------------
+# Bastion module
+# -------------------------
+module "bastion" {
+  source = "./modules/bastion"
+
+  name                = local.name
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-  size                = "Standard_D2d_v4"
-
-  admin_username                  = var.admin_username
-  disable_password_authentication = true
-
-  network_interface_ids = [azurerm_network_interface.linux_target_nic[0].id]
-
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.admin_public_key
-  }
-
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "StandardSSD_LRS"
-    disk_size_gb         = 64
-  }
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts"
-    version   = "latest"
-  }
+  subnet_bastion_id   = module.network.subnet_bastion_id
+  tags                = local.tags
 }
 
-# ---------------------------
-# OPTIONAL: Windows target VM
-# ---------------------------
-resource "azurerm_network_interface" "windows_target_nic" {
-  count               = var.create_windows_target ? 1 : 0
-  name                = "${local.name}-win-tgt-nic"
+# -------------------------
+# Scanner module (OpenVAS)
+# -------------------------
+module "scanner" {
+  source = "./modules/scanner"
+
+  name                = local.name
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-
-  ip_configuration {
-    name                          = "ipconfig1"
-    subnet_id                     = azurerm_subnet.targets.id
-    private_ip_address_allocation = "Dynamic"
-  }
+  subnet_security_id  = module.network.subnet_security_id
+  admin_username      = var.admin_username
+  admin_public_key    = var.admin_public_key
+  vm_size             = var.openvas_vm_size
+  tags                = local.tags
 }
 
-resource "azurerm_windows_virtual_machine" "windows_target" {
-  count               = var.create_windows_target ? 1 : 0
-  name                = "${local.name}-windows-target"
+# -------------------------
+# Targets module (Linux, Windows, Juice Shop, DVWA)
+# -------------------------
+module "targets" {
+  source = "./modules/targets"
+
+  name                = local.name
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-  size                = "Standard_D2d_v4"
+  subnet_targets_id   = module.network.subnet_targets_id
+  admin_username      = var.admin_username
+  admin_public_key    = var.admin_public_key
+  vm_size             = var.target_vm_size
+  tags                = local.tags
 
-  admin_username = var.windows_admin_username
-  admin_password = var.windows_admin_password
+  create_linux_target   = var.create_linux_target
+  create_windows_target = var.create_windows_target
+  create_juice_shop     = var.create_juice_shop
+  create_dvwa           = var.create_dvwa
 
-  network_interface_ids = [azurerm_network_interface.windows_target_nic[0].id]
+  windows_admin_username = var.windows_admin_username
+  windows_admin_password = coalesce(local.windows_admin_password, "dummy-not-used")
+}
 
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "StandardSSD_LRS"
-    disk_size_gb         = 128
-  }
+# -------------------------
+# Monitoring module (Log Analytics, Sentinel, Defender for Cloud, Defender-to-Sentinel connector)
+# -------------------------
+module "monitoring" {
+  source = "./modules/monitoring"
 
-  source_image_reference {
-    publisher = "MicrosoftWindowsServer"
-    offer     = "WindowsServer"
-    sku       = "2022-Datacenter"
-    version   = "latest"
-  }
+  name                         = local.name
+  location                     = azurerm_resource_group.rg.location
+  resource_group_name          = azurerm_resource_group.rg.name
+  log_analytics_retention_days = var.log_analytics_retention_days
+  enable_defender_for_cloud    = var.enable_defender_for_cloud
+  tags                         = local.tags
+
+  nsg_ids = var.enable_defender_for_cloud ? {
+    openvas = module.network.nsg_openvas_id
+    targets = module.network.nsg_targets_id
+  } : {}
+
+  openvas_vm_id           = module.scanner.openvas_id
+  create_linux_target_dcr = var.create_linux_target
+  linux_target_vm_id      = var.create_linux_target ? (module.targets.linux_target_id != null ? module.targets.linux_target_id : "") : ""
+  create_juice_shop_dcr   = var.create_juice_shop
+  juice_shop_vm_id        = var.create_juice_shop ? (module.targets.juice_shop_id != null ? module.targets.juice_shop_id : "") : ""
+  create_dvwa_dcr         = var.create_dvwa
+  dvwa_vm_id              = var.create_dvwa ? (module.targets.dvwa_id != null ? module.targets.dvwa_id : "") : ""
 }
