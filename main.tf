@@ -179,41 +179,52 @@ resource "azurerm_network_interface" "openvas_nic" {
 }
 
 locals {
+  # Cloud-init for Ubuntu 22.04: installs Docker CE + Compose v2 plugin, deploys Greenbone stack,
+  # exposes UI on 0.0.0.0:9392, and retries until gvmd + gsa are running.
   openvas_cloud_init = <<-EOF
 #cloud-config
 package_update: true
 package_upgrade: true
 
-packages:
-  - ca-certificates
-  - curl
-  - gnupg
-
 runcmd:
+  # Start logging ASAP
   - [ bash, -lc, "set -euxo pipefail; exec > >(tee -a /var/log/openvas-bootstrap.log) 2>&1" ]
 
-  # Add Docker official repo (needed for docker-compose-plugin)
+  # Base deps
+  - [ bash, -lc, "apt-get update" ]
+  - [ bash, -lc, "apt-get install -y ca-certificates curl gnupg lsb-release" ]
+
+  # Docker official repo (for docker-ce + docker-compose-plugin)
   - [ bash, -lc, "install -m 0755 -d /etc/apt/keyrings" ]
   - [ bash, -lc, "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg" ]
   - [ bash, -lc, "chmod a+r /etc/apt/keyrings/docker.gpg" ]
-  - [ bash, -lc, "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable\" > /etc/apt/sources.list.d/docker.list" ]
+  - [ bash, -lc, "CODENAME=$(. /etc/os-release && echo $VERSION_CODENAME); ARCH=$(dpkg --print-architecture); echo \"deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $CODENAME stable\" > /etc/apt/sources.list.d/docker.list" ]
   - [ bash, -lc, "apt-get update" ]
 
   # Install Docker Engine + Compose v2 plugin
   - [ bash, -lc, "apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin" ]
   - [ bash, -lc, "systemctl enable --now docker" ]
 
-  # Deploy Greenbone Community Containers (includes gsa + port mapping)
-  - [ bash, -lc, "mkdir -p /opt/gvm" ]
+  # Wait for Docker daemon
+  - [ bash, -lc, "for i in {1..90}; do docker info >/dev/null 2>&1 && break; echo waiting-for-docker; sleep 2; done" ]
+
+  # Deploy Greenbone compose
+  - [ bash, -lc, "mkdir -p /opt/gvm && cd /opt/gvm" ]
   - [ bash, -lc, "cd /opt/gvm && curl -fL -o docker-compose.yml https://greenbone.github.io/docs/latest/_static/docker-compose.yml" ]
 
-  # Start using Compose v2
-  - [ bash, -lc, "cd /opt/gvm && docker compose up -d" ]
+  # Expose GSA UI on all interfaces (default is localhost only)
+  - [ bash, -lc, "cd /opt/gvm && sed -i 's/127\\.0\\.0\\.1:9392:80/0.0.0.0:9392:80/' docker-compose.yml || true" ]
 
-  # Sanity
-  - [ bash, -lc, "docker compose ps || true" ]
+  # Pull first to reduce first-boot race conditions
+  - [ bash, -lc, "cd /opt/gvm && COMPOSE_PROFILES=full docker compose pull" ]
+
+  # Bring up FULL profile + retry until gvmd and gsa are running
+  - [ bash, -lc, "cd /opt/gvm && for i in {1..12}; do COMPOSE_PROFILES=full docker compose up -d || true; sleep 15; docker compose ps --services --filter status=running | grep -qx gvmd && docker compose ps --services --filter status=running | grep -qx gsa && echo 'gvmd+gsa running' && break; echo \"waiting for gvmd/gsa (attempt $i)\"; docker compose ps || true; done" ]
+
+  # Final sanity
+  - [ bash, -lc, "cd /opt/gvm && docker compose ps || true" ]
   - [ bash, -lc, "ss -lntp | grep 9392 || true" ]
-  EOF
+EOF
 }
 
 
