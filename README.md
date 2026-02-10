@@ -116,7 +116,3 @@ Test the detection rules by simulating attacks:
   1. In the Azure Portal, go to **Microsoft Sentinel**.
   2. Select your workspace and click on **Incidents**.
   3. You should see alerts like `SOC Lab - SSH brute force attempts` or `SOC Lab - NSG deny spike` within 5-15 minutes.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
