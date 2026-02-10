@@ -95,6 +95,8 @@ resource "azurerm_sentinel_alert_rule_scheduled" "ssh_bruteforce" {
   severity                   = "High"
   enabled                    = true
 
+  depends_on = [azurerm_sentinel_log_analytics_workspace_onboarding.sentinel]
+
   query = <<-KQL
 Syslog
 | where ProcessName in ("sshd", "ssh")
@@ -134,6 +136,8 @@ resource "azurerm_sentinel_alert_rule_scheduled" "new_user" {
   severity                   = "Medium"
   enabled                    = true
 
+  depends_on = [azurerm_sentinel_log_analytics_workspace_onboarding.sentinel]
+
   query = <<-KQL
 Syslog
 | where SyslogMessage has_any ("useradd", "new user", "adduser")
@@ -163,6 +167,8 @@ resource "azurerm_sentinel_alert_rule_scheduled" "nsg_denies_spike" {
   display_name               = "SOC Lab - NSG deny spike"
   severity                   = "Medium"
   enabled                    = true
+
+  depends_on = [azurerm_sentinel_log_analytics_workspace_onboarding.sentinel]
 
   query = <<-KQL
 AzureDiagnostics
