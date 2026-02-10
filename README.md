@@ -65,7 +65,3 @@ The lab is isolated within an Azure Resource Group and follows best practices fo
 - **Scanner**: Provisions the OpenVAS scanning engine.
 - **Targets**: Deploys vulnerable Linux, Windows, and Web App VMs.
 - **Monitoring**: Sets up Sentinel and Defender for Cloud dashboarding.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
