@@ -116,3 +116,27 @@ Test the detection rules by simulating attacks:
   1. In the Azure Portal, go to **Microsoft Sentinel**.
   2. Select your workspace and click on **Incidents**.
   3. You should see alerts like `SOC Lab - SSH brute force attempts` or `SOC Lab - NSG deny spike` within 5-15 minutes.
+
+## CI/CD Pipeline
+
+This project is configured with a GitHub Actions pipeline (`.github/workflows/terraform.yml`) that automates Terraform operations and security scanning.
+
+### Pipeline Workflow
+1. **Trigger**: Push to `main` or Pull Requests.
+2. **Security Scan**: Runs `tfsec` to catch security misconfigurations.
+3. **Terraform**:
+   - `terraform init`
+   - `terraform validate`
+   - `terraform plan`
+   - `terraform apply` (Only on `push` to `main` if all checks pass)
+
+### Required GitHub Secrets
+To use the pipeline, you must configure the following **Repository Secrets** in GitHub:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_CLIENT_SECRET`
+- `AZURE_SUBSCRIPTION_ID`
+- `AZURE_TENANT_ID`
+
+> **Note**: For state persistence across runs, ensure you have configured a **Remote Backend** (e.g., Azure Storage Account) in your `backend.tf` or via command-line arguments, as GitHub Actions runners are ephemeral.
+
