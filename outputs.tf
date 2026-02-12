@@ -33,10 +33,6 @@ output "windows_target_private_ip" {
   description = "Windows target private IP (if created)"
 }
 
-output "juice_shop_private_ip" {
-  value       = module.targets.juice_shop_private_ip
-  description = "OWASP Juice Shop private IP (if created)"
-}
 
 output "dvwa_private_ip" {
   value       = module.targets.dvwa_private_ip

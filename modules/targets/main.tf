@@ -1,23 +1,36 @@
 locals {
-  linux_target_juice_cloud_init = <<-EOF
+  linux_target_cloud_init = <<-EOF
 #cloud-config
 package_update: true
 package_upgrade: true
+
 runcmd:
+  # Base deps
   - apt-get update && apt-get install -y ca-certificates curl gnupg
+
+  # Docker repo setup
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - chmod a+r /etc/apt/keyrings/docker.gpg
   - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+
+  # Install Docker
   - apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
   - systemctl enable --now docker
-  - sleep 30
+
+  # Wait for docker daemon
+  - until docker info >/dev/null 2>&1; do sleep 2; done
+
+  # Run Juice Shop
+  - docker rm -f juice-shop >/dev/null 2>&1 || true
+  - docker pull bkimminich/juice-shop
   - docker run -d --name juice-shop -p 3000:3000 --restart unless-stopped bkimminich/juice-shop
+
+  # Wait until the web app is reachable locally
+  - until curl -fsS http://localhost:3000 >/dev/null 2>&1; do sleep 2; done
 EOF
 }
 
-# ---------------------------
-# OPTIONAL: Linux target VM
-# ---------------------------
 resource "azurerm_network_interface" "linux_target_nic" {
   count               = var.create_linux_target ? 1 : 0
   name                = "${var.name}-lin-tgt-nic"
@@ -63,7 +76,7 @@ resource "azurerm_linux_virtual_machine" "linux_target" {
     version   = "latest"
   }
 
-  user_data = base64encode(local.linux_target_juice_cloud_init)
+  user_data = base64encode(local.linux_target_cloud_init)
 }
 
 resource "azurerm_virtual_machine_extension" "ama_linux_target" {
@@ -75,6 +88,7 @@ resource "azurerm_virtual_machine_extension" "ama_linux_target" {
   type_handler_version       = "1.0"
   auto_upgrade_minor_version = true
 }
+
 
 # ---------------------------
 # OPTIONAL: Windows target VM (with audit policies + bad behavior simulation)
@@ -148,84 +162,6 @@ resource "azurerm_virtual_machine_extension" "windows_audit_and_simulation" {
   })
 
   depends_on = [azurerm_virtual_machine_extension.ama_windows_target]
-}
-
-# ---------------------------
-# OPTIONAL: OWASP Juice Shop (deliberately vulnerable web app)
-# ---------------------------
-locals {
-  juice_shop_cloud_init = <<-EOF
-#cloud-config
-package_update: true
-package_upgrade: true
-runcmd:
-  - apt-get update && apt-get install -y ca-certificates curl gnupg
-  - install -m 0755 -d /etc/apt/keyrings
-  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
-  - apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-  - systemctl enable --now docker
-  - sleep 30
-  - docker run -d --name juice-shop -p 3000:3000 --restart unless-stopped bkimminich/juice-shop
-EOF
-}
-
-resource "azurerm_network_interface" "juice_shop_nic" {
-  count               = 0
-  name                = "${var.name}-juice-shop-nic"
-  location            = var.location
-  resource_group_name = var.resource_group_name
-  tags                = merge(var.tags, { purpose = "attack-simulation" })
-
-  ip_configuration {
-    name                          = "ipconfig1"
-    subnet_id                     = var.subnet_targets_id
-    private_ip_address_allocation = "Dynamic"
-  }
-}
-
-resource "azurerm_linux_virtual_machine" "juice_shop" {
-  count               = 0
-  name                = "${var.name}-juice-shop"
-  location            = var.location
-  resource_group_name = var.resource_group_name
-  size                = var.vm_size
-  tags                = merge(var.tags, { purpose = "attack-simulation" })
-
-  admin_username                  = var.admin_username
-  disable_password_authentication = true
-
-  network_interface_ids = [azurerm_network_interface.juice_shop_nic[0].id]
-
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.admin_public_key
-  }
-
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "StandardSSD_LRS"
-    disk_size_gb         = 32
-  }
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts"
-    version   = "latest"
-  }
-
-  user_data = base64encode(local.juice_shop_cloud_init)
-}
-
-resource "azurerm_virtual_machine_extension" "ama_juice_shop" {
-  count                      = 0
-  name                       = "AzureMonitorLinuxAgent"
-  virtual_machine_id         = azurerm_linux_virtual_machine.juice_shop[0].id
-  publisher                  = "Microsoft.Azure.Monitor"
-  type                       = "AzureMonitorLinuxAgent"
-  type_handler_version       = "1.0"
-  auto_upgrade_minor_version = true
 }
 
 # ---------------------------

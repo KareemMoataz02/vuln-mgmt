@@ -31,14 +31,14 @@ resource "azurerm_resource_group" "rg" {
 # Key Vault for secrets (no passwords in tfvars/state when using random)
 # -------------------------
 resource "azurerm_key_vault" "kv" {
-  name                        = substr(replace("${local.name}-kv", "-", ""), 0, 24)
-  location                    = azurerm_resource_group.rg.location
-  resource_group_name         = azurerm_resource_group.rg.name
-  tenant_id                   = data.azurerm_client_config.current.tenant_id
-  sku_name                    = "standard"
-  soft_delete_retention_days  = 7
-  purge_protection_enabled    = false
-  tags                        = local.tags
+  name                       = substr(replace("${local.name}-kv", "-", ""), 0, 24)
+  location                   = azurerm_resource_group.rg.location
+  resource_group_name        = azurerm_resource_group.rg.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  soft_delete_retention_days = 7
+  purge_protection_enabled   = false
+  tags                       = local.tags
 }
 
 resource "azurerm_key_vault_access_policy" "terraform" {
@@ -161,4 +161,11 @@ module "monitoring" {
   juice_shop_vm_id        = var.create_juice_shop ? (module.targets.juice_shop_id != null ? module.targets.juice_shop_id : "") : ""
   create_dvwa_dcr         = var.create_dvwa
   dvwa_vm_id              = var.create_dvwa ? (module.targets.dvwa_id != null ? module.targets.dvwa_id : "") : ""
+
+  linux_vm_ids = {
+    openvas      = module.scanner.openvas_id
+    linux_target = var.create_linux_target ? module.targets.linux_target_id : ""
+    juice_shop   = var.create_juice_shop ? module.targets.juice_shop_id : ""
+    dvwa         = var.create_dvwa ? module.targets.dvwa_id : ""
+  }
 }

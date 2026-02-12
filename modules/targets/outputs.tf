@@ -18,16 +18,6 @@ output "windows_target_private_ip" {
   description = "Windows target private IP"
 }
 
-output "juice_shop_id" {
-  value       = try(azurerm_linux_virtual_machine.juice_shop[0].id, null)
-  description = "Juice Shop VM ID"
-}
-
-output "juice_shop_private_ip" {
-  value       = try(azurerm_network_interface.juice_shop_nic[0].private_ip_address, null)
-  description = "Juice Shop private IP"
-}
-
 output "dvwa_id" {
   value       = try(azurerm_linux_virtual_machine.dvwa[0].id, null)
   description = "DVWA VM ID"

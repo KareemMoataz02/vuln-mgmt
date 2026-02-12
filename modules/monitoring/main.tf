@@ -85,6 +85,8 @@ resource "azurerm_monitor_data_collection_rule_association" "dcr_assoc" {
   data_collection_rule_id = azurerm_monitor_data_collection_rule.dcr_linux_syslog.id
 }
 
+
+
 # -------------------------
 # Sentinel detections (Scheduled Analytics Rules)
 # -------------------------
@@ -113,10 +115,10 @@ KQL
   incident_configuration {
     create_incident = true
     grouping {
-      enabled                = true
+      enabled                 = true
       reopen_closed_incidents = false
-      lookback_duration      = "PT1H"
-      entity_matching_method = "AllEntities"
+      lookback_duration       = "PT1H"
+      entity_matching_method  = "AllEntities"
     }
   }
 
@@ -153,10 +155,10 @@ KQL
   incident_configuration {
     create_incident = true
     grouping {
-      enabled                = true
+      enabled                 = true
       reopen_closed_incidents = false
-      lookback_duration      = "PT4H"
-      entity_matching_method = "AllEntities"
+      lookback_duration       = "PT4H"
+      entity_matching_method  = "AllEntities"
     }
   }
 }
@@ -191,10 +193,10 @@ KQL
   incident_configuration {
     create_incident = true
     grouping {
-      enabled                = true
+      enabled                 = true
       reopen_closed_incidents = false
-      lookback_duration      = "PT2H"
-      entity_matching_method = "AllEntities"
+      lookback_duration       = "PT2H"
+      entity_matching_method  = "AllEntities"
     }
   }
 }
