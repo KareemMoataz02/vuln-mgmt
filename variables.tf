@@ -64,8 +64,8 @@ variable "create_dvwa" {
 }
 
 variable "windows_admin_username" {
-  type        = string
-  default     = "winadmin"
+  type    = string
+  default = "winadmin"
 }
 
 variable "windows_admin_password" {

@@ -75,6 +75,10 @@ resource "azurerm_linux_virtual_machine" "linux_target" {
     sku       = "22_04-lts"
     version   = "latest"
   }
+  identity {
+    type = "SystemAssigned"
+  }
+
 
   user_data = base64encode(local.linux_target_cloud_init)
 }
@@ -136,6 +140,7 @@ resource "azurerm_windows_virtual_machine" "windows_target" {
     sku       = "2022-Datacenter"
     version   = "latest"
   }
+
 }
 
 # Enable audit policies and inject "bad behavior" script (failed logons, suspicious PowerShell)
