@@ -24,6 +24,20 @@ runcmd:
   - [ bash, -lc, "cd /opt/gvm && for i in {1..12}; do COMPOSE_PROFILES=full docker compose up -d || true; sleep 15; docker compose ps --services --filter status=running | grep -qx gvmd && docker compose ps --services --filter status=running | grep -qx gsa && echo 'gvmd+gsa running' && break; echo \"waiting for gvmd/gsa (attempt $i)\"; docker compose ps || true; done" ]
   - [ bash, -lc, "cd /opt/gvm && docker compose ps || true" ]
   - [ bash, -lc, "ss -lntp | grep 9392 || true" ]
+  
+  # -------------------------
+  # OWASP ZAP (runs alongside OpenVAS)
+  # -------------------------
+  - [ bash, -lc, "mkdir -p /opt/zap-data" ]
+  - [ bash, -lc, "chmod 777 /opt/zap-data" ]
+  - [ bash, -lc, "docker pull ghcr.io/zaproxy/zaproxy:stable" ]
+  - [ bash, -lc, "docker rm -f zap-scanner > /dev/null 2>&1 || true" ]
+  - [ bash, -lc, "docker run -d --name zap-scanner --restart unless-stopped -u zap -p 8080:8080 -v /opt/zap-data:/zap/wrk:rw ghcr.io/zaproxy/zaproxy:stable zap.sh -daemon -host 0.0.0.0 -port 8080 -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true -config api.key=zapkey123" ]
+  - [ bash, -lc, "for i in {1..30}; do curl -s http://localhost:8080/JSON/core/view/version/ > /dev/null 2>&1 && echo 'ZAP is ready' && break; echo 'waiting for ZAP...'; sleep 2; done" ]
+  - [ bash, -lc, "docker ps | grep zap-scanner || true" ]
+  - [ bash, -lc, "echo 'Running ZAP baseline scan against Juice Shop...'" ]
+  - [ bash, -lc, "docker exec zap-scanner zap-baseline.py -t http://10.10.2.4:3000 -r baseline-report.html -w baseline-report.md || true" ]
+  - [ bash, -lc, "echo 'ZAP baseline scan complete. Reports saved in /opt/zap-data/'" ]
 EOF
 }
 

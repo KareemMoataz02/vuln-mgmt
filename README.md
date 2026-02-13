@@ -8,11 +8,24 @@ A comprehensive, automated vulnerability management lab environment deployed on 
 
 This lab environment consists of several key components designed to simulate a realistic corporate network with integrated security controls.
 
-### 🛡️ Vulnerability Scanner (OpenVAS)
-The lab features a pre-configured **OpenVAS** (Greenbone Vulnerability Management) instance.
+### 🛡️ Vulnerability Scanners
+
+The lab features two complementary vulnerability scanning tools:
+
+#### OpenVAS (Greenbone Vulnerability Management)
 - **Deployment**: Automated via `cloud-init` on Ubuntu 22.04.
 - **Architecture**: Runs as a multi-container Docker application (`gvmd`, `gsa`, `ospd-openvas`).
-- **Functionality**: Performs authenticated and unauthenticated scans across the internal network.
+- **Functionality**: Performs authenticated and unauthenticated network-level scans across the internal network.
+- **Web UI**: Accessible at `https://<openvas-ip>:9392` (default credentials: `admin` / `admin`).
+
+#### OWASP ZAP (Zed Attack Proxy)
+- **Deployment**: Runs as a Docker container on the same VM as OpenVAS.
+- **Architecture**: Containerized ZAP daemon with API and web UI exposed on port 8080.
+- **Functionality**: Specialized web application security scanner for finding vulnerabilities in web apps.
+- **Target**: Pre-configured to scan OWASP Juice Shop at `http://10.10.2.4:3000`.
+- **API Access**: `http://localhost:8080` (API key: `zapkey123`).
+- **Scan Reports**: Stored in `/opt/zap-data/` on the scanner VM.
+- **Automated Scanning**: Runs a baseline scan on startup and can be triggered via API.
 
 ### 🎯 Target Systems
 The lab includes diverse targets to test different attack vectors:
@@ -105,7 +118,45 @@ Secure access is provided via **Azure Bastion**.
    - Use the **Task Wizard** (magic wand icon).
    - Enter the Targets subnet range (e.g., `10.0.2.0/24`) and click **Start Scan**.
 
-### 4. Trigger SIEM Alerts (Microsoft Sentinel)
+### 4. Web Application Scanning (OWASP ZAP)
+1. Connect to the **OpenVAS VM** via Bastion (same VM hosts both scanners).
+2. **Verify ZAP is running**:
+   ```bash
+   docker ps | grep zap-scanner
+   docker logs zap-scanner
+   ```
+3. **Check the automated baseline scan results**:
+   ```bash
+   ls -la /opt/zap-data/
+   cat /opt/zap-data/baseline-report.md
+   ```
+4. **Run a manual scan via ZAP API**:
+   ```bash
+   # Check ZAP version/status
+   curl -s http://localhost:8080/JSON/core/view/version/
+   
+   # Spider the target (crawl to discover URLs)
+   SCAN_ID=$(curl -s "http://localhost:8080/JSON/spider/action/scan/?url=http://10.10.2.4:3000&apikey=zapkey123" | grep -oP '(?<="scan":")[^"]*')
+   
+   # Check spider status (wait until progress reaches 100)
+   curl -s "http://localhost:8080/JSON/spider/view/status/?scanId=$SCAN_ID&apikey=zapkey123"
+   
+   # Run active scan (this may take several minutes)
+   curl -s "http://localhost:8080/JSON/ascan/action/scan/?url=http://10.10.2.4:3000&apikey=zapkey123"
+   
+   # Generate HTML report
+   curl -s "http://localhost:8080/OTHER/core/other/htmlreport/?apikey=zapkey123" > /opt/zap-data/full-scan-report.html
+   ```
+5. **Access ZAP Web UI** (optional):
+   - Set up an SSH tunnel from your local machine:
+     ```bash
+     az network bastion tunnel --name <bastion_name> --resource-group <rg_name> \
+       --target-resource-id <openvas_vm_id> --resource-port 8080 --port 8080
+     ```
+   - Open your browser to `http://localhost:8080/zap/`
+
+### 5. Trigger SIEM Alerts (Microsoft Sentinel)
+
 Test the detection rules by simulating attacks:
 - **SSH Brute Force**: From the OpenVAS VM (or any other VM in the VNet), attempt to SSH into the Linux Target multiple times with a wrong password:
   ```bash
@@ -133,10 +184,32 @@ This project is configured with a GitHub Actions pipeline (`.github/workflows/te
 ### Required GitHub Secrets
 To use the pipeline, you must configure the following **Repository Secrets** in GitHub:
 
+**Azure Authentication:**
 - `AZURE_CLIENT_ID`
 - `AZURE_CLIENT_SECRET`
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_TENANT_ID`
 
-> **Note**: For state persistence across runs, ensure you have configured a **Remote Backend** (e.g., Azure Storage Account) in your `backend.tf` or via command-line arguments, as GitHub Actions runners are ephemeral.
+**Terraform Variables:**
+- `ADMIN_PUBLIC_KEY` - Your SSH public key for Linux VMs
+
+**Remote Backend (State Storage):**
+- `BACKEND_STORAGE_ACCOUNT` - Created by `scripts/create-backend.sh`
+- `BACKEND_ACCESS_KEY` - Created by `scripts/create-backend.sh`
+
+### Setting Up Remote Backend
+
+The pipeline uses Azure Storage to persist Terraform state across runs. To set this up:
+
+1. **Run the bootstrap script**:
+   ```bash
+   ./scripts/create-backend.sh
+   ```
+   This creates a storage account and container for state files.
+
+2. **Add the secrets**: The script outputs two values that you need to add to GitHub Secrets:
+   - `BACKEND_STORAGE_ACCOUNT`
+   - `BACKEND_ACCESS_KEY`
+
+3. **Commit and push**: The pipeline will automatically use the remote backend on the next run.
 
