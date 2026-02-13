@@ -156,16 +156,16 @@ module "monitoring" {
 
   openvas_vm_id           = module.scanner.openvas_id
   create_linux_target_dcr = var.create_linux_target
-  linux_target_vm_id      = var.create_linux_target ? (module.targets.linux_target_id != null ? module.targets.linux_target_id : "") : ""
+  linux_target_vm_id      = var.create_linux_target ? module.targets.linux_target_id : ""
   create_juice_shop_dcr   = var.create_juice_shop
-  juice_shop_vm_id        = var.create_juice_shop ? (module.targets.juice_shop_id != null ? module.targets.juice_shop_id : "") : ""
+  juice_shop_vm_id        = var.create_juice_shop ? module.targets.juice_shop_id : ""
   create_dvwa_dcr         = var.create_dvwa
-  dvwa_vm_id              = var.create_dvwa ? (module.targets.dvwa_id != null ? module.targets.dvwa_id : "") : ""
+  dvwa_vm_id              = var.create_dvwa ? module.targets.dvwa_id : ""
 
-  linux_vm_ids = {
-    openvas      = module.scanner.openvas_id
-    linux_target = var.create_linux_target ? module.targets.linux_target_id : ""
-    juice_shop   = var.create_juice_shop ? module.targets.juice_shop_id : ""
-    dvwa         = var.create_dvwa ? module.targets.dvwa_id : ""
-  }
+  linux_vm_ids = merge(
+    { openvas = module.scanner.openvas_id },
+    var.create_linux_target ? { linux_target = module.targets.linux_target_id } : {},
+    var.create_juice_shop ? { juice_shop = module.targets.juice_shop_id } : {},
+    var.create_dvwa ? { dvwa = module.targets.dvwa_id } : {}
+  )
 }

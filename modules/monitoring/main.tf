@@ -79,7 +79,7 @@ resource "azurerm_monitor_data_collection_rule" "dcr_linux_syslog" {
 }
 
 resource "azurerm_monitor_data_collection_rule_association" "dcr_assoc" {
-  for_each = { for k, v in var.linux_vm_ids : k => v if try(v, "") != "" }
+  for_each = var.linux_vm_ids
 
   name                    = "${var.name}-dcr-${each.key}"
   target_resource_id      = each.value
