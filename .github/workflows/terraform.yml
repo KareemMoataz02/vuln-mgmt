@@ -38,6 +38,11 @@ jobs:
       ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       TF_VAR_admin_public_key: ${{ secrets.ADMIN_PUBLIC_KEY }}
+      TF_VAR_create_linux_target: true
+      TF_VAR_create_windows_target: false
+      TF_VAR_create_juice_shop: false
+      TF_VAR_create_dvwa: false
+      TF_VAR_enable_defender_for_cloud: true
 
     steps:
       - name: Checkout

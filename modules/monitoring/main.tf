@@ -23,6 +23,7 @@ resource "azurerm_security_center_subscription_pricing" "defender_servers" {
 
   tier          = "Standard"
   resource_type = "VirtualMachines"
+  subplan       = "P2"
 }
 
 # Defender-for-Sentinel connector: not available in azurerm provider. Enable manually in Sentinel:
